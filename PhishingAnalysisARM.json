@@ -1,0 +1,347 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workflows_Shruti_SCP_PhishingAnalysis_name": {
+            "defaultValue": "Shruti-SCP-PhishingAnalysis",
+            "type": "String"
+        },
+        "connections_office365_17_externalid": {
+            "defaultValue": "/subscriptions/99005f96-e572-4035-b476-836fd9d83d64/resourceGroups/Sentinel_Demo/providers/Microsoft.Web/connections/office365-17",
+            "type": "String"
+        },
+        "connections_securitycopilot_15_externalid": {
+            "defaultValue": "/subscriptions/99005f96-e572-4035-b476-836fd9d83d64/resourceGroups/Sentinel_Demo/providers/Microsoft.Web/connections/securitycopilot-15",
+            "type": "String"
+        },
+        "connections_conversionservice_1_externalid": {
+            "defaultValue": "/subscriptions/99005f96-e572-4035-b476-836fd9d83d64/resourceGroups/Sentinel_Demo/providers/Microsoft.Web/connections/conversionservice-1",
+            "type": "String"
+        }
+    },
+    "variables": {},
+    "resources": [
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('workflows_Shruti_SCP_PhishingAnalysis_name')]",
+            "location": "eastus",
+            "tags": {
+                "Created By": "Abbas Bengtsson",
+                "CreatedDate": "5/17/2024 4:19:09 PM",
+                "CreatorUPN": "abbe67@woodgrove.ms"
+            },
+            "properties": {
+                "state": "Disabled",
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "When_a_new_email_arrives_(V3)": {
+                            "splitOn": "@triggerBody()?['value']",
+                            "type": "ApiConnectionNotification",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['office365-2']['connectionId']"
+                                    }
+                                },
+                                "fetch": {
+                                    "pathTemplate": {
+                                        "template": "/v3/Mail/OnNewEmail"
+                                    },
+                                    "method": "get",
+                                    "queries": {
+                                        "to": "SecOpsInbox@organization.com",
+                                        "importance": "Any",
+                                        "fetchOnlyWithAttachment": true,
+                                        "includeAttachments": true,
+                                        "folderPath": "Inbox"
+                                    }
+                                },
+                                "subscribe": {
+                                    "body": {
+                                        "NotificationUrl": "@{listCallbackUrl()}"
+                                    },
+                                    "pathTemplate": {
+                                        "template": "/GraphMailSubscriptionPoke/$subscriptions"
+                                    },
+                                    "method": "post",
+                                    "queries": {
+                                        "importance": "Any",
+                                        "fetchOnlyWithAttachment": true,
+                                        "folderPath": "Inbox"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "actions": {
+                        "Domain_reputation_MDTI": {
+                            "runAfter": {
+                                "Triage_this_email": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['securitycopilot-1']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": {
+                                    "PromptContent": "Return the reputation for all the domains and IP addresses in the e-mail besides https://security.microsoft.com/userSubmissionsReportMessage, include the sender domain @{body('Parse_JSON')?['from']}(this should be the string that is coming after the @ sign)",
+                                    "SessionId": "@body('Triage_this_email')?['sessionId']",
+                                    "SkillName": "GetReputationsForIndicators"
+                                },
+                                "path": "/process-prompt"
+                            }
+                        },
+                        "Html_to_text": {
+                            "runAfter": {
+                                "Parse_JSON": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['conversionservice-1']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": "<p>@{body('Parse_JSON')}</p>",
+                                "path": "/html2text"
+                            }
+                        },
+                        "WHO_ELSE_CLICKED_on_this_Email_(KQL)": {
+                            "runAfter": {
+                                "Was_this_sent_to_OTHER_USERS_(KQL)": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['securitycopilot-1']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": {
+                                    "PromptContent": "Based on the email title : @{body('Parse_JSON')?['subject']}, and the sender email address: @{body('Parse_JSON')?['from']}check if other users in the organization click on the link inside the email",
+                                    "SessionId": "@body('Was_this_sent_to_OTHER_USERS_(KQL)')?['sessionId']",
+                                    "SkillName": "GetUrlClicksBySubjectAndSenderEmail"
+                                },
+                                "path": "/process-prompt"
+                            }
+                        },
+                        "Was_this_sent_to_OTHER_USERS_(KQL)": {
+                            "runAfter": {
+                                "Look_up_relevant_articles": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['securitycopilot-1']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": {
+                                    "PromptContent": "Fetch emails with the same subject name, to see if it has been sent to others in my organization: use email subject:@{body('Parse_JSON')?['subject']}",
+                                    "SessionId": "@body('Look_up_relevant_articles')?['sessionId']",
+                                    "SkillName": "GetEmailsByEmailSubject"
+                                },
+                                "path": "/process-prompt"
+                            }
+                        },
+                        "Look_up_relevant_articles": {
+                            "runAfter": {
+                                "Domain_reputation_MDTI": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['securitycopilot-1']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": {
+                                    "PromptContent": "Check if we have Threat Intelligence articles associated with any of the IP addresses, domains, or e-mail addresses",
+                                    "SessionId": "@body('Domain_reputation_MDTI')?['sessionId']",
+                                    "SkillName": "GetArticlesIndicators"
+                                },
+                                "path": "/process-prompt"
+                            }
+                        },
+                        "Parse_JSON": {
+                            "runAfter": {},
+                            "type": "ParseJson",
+                            "inputs": {
+                                "content": "@triggerBody()",
+                                "schema": {
+                                    "properties": {
+                                        "attachments": {
+                                            "type": "array"
+                                        },
+                                        "bccRecipients": {},
+                                        "body": {
+                                            "type": "string"
+                                        },
+                                        "bodyPreview": {
+                                            "type": "string"
+                                        },
+                                        "ccRecipients": {},
+                                        "conversationId": {
+                                            "type": "string"
+                                        },
+                                        "from": {
+                                            "type": "string"
+                                        },
+                                        "hasAttachments": {
+                                            "type": "boolean"
+                                        },
+                                        "id": {
+                                            "type": "string"
+                                        },
+                                        "importance": {
+                                            "type": "string"
+                                        },
+                                        "internetMessageId": {
+                                            "type": "string"
+                                        },
+                                        "isHtml": {
+                                            "type": "boolean"
+                                        },
+                                        "isRead": {
+                                            "type": "boolean"
+                                        },
+                                        "receivedDateTime": {
+                                            "type": "string"
+                                        },
+                                        "replyTo": {},
+                                        "subject": {
+                                            "type": "string"
+                                        },
+                                        "toRecipients": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        },
+                        "Summarize_findings": {
+                            "runAfter": {
+                                "WHO_ELSE_CLICKED_on_this_Email_(KQL)": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['securitycopilot-1']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": {
+                                    "PromptContent": "Above was an investigation performed by a security analyst to determine if an e-mail was a phishing attempt. Summarize this investigation with all the steps taken, share and decide if this is a phishing email. Share certainty percentage: if the email is not suspicious give it 0-30% if it medium suspicious give it 30%-74% and if its highly suspicious give it 75%-100%, you **must** include suspicious certainty percentage.",
+                                    "SessionId": "@body('WHO_ELSE_CLICKED_on_this_Email_(KQL)')?['sessionId']",
+                                    "SkillName": "SummarizeData"
+                                },
+                                "path": "/process-prompt"
+                            }
+                        },
+                        "Triage_this_email": {
+                            "runAfter": {
+                                "Html_to_text": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['securitycopilot-1']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": {
+                                    "PromptContent": "/askGPT Triage the following email and point out what you find suspicious?. Ignore this URL https://security.microsoft.com/userSubmissionsReportMessage. Investigate the Message-ID for any inconsistencies or signs of spoofing or urgency. Use inputs: email body:@{body('Html_to_text')} , sender email:@{body('Parse_JSON')?['from']}, receiver email:@{body('Parse_JSON')?['toRecipients']}, messageId:@{body('Parse_JSON')?['internetMessageId']}, emailSubject:@{body('Parse_JSON')?['subject']},Email receivedDateTime:@{body('Parse_JSON')?['receivedDateTime']}, importance:@{body('Parse_JSON')?['importance']}",
+                                    "SkillName": "askGPT"
+                                },
+                                "path": "/process-prompt"
+                            }
+                        },
+                        "Send_email_with_options": {
+                            "runAfter": {
+                                "Summarize_findings": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnectionWebhook",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['office365-2']['connectionId']"
+                                    }
+                                },
+                                "body": {
+                                    "NotificationUrl": "@listCallbackUrl()",
+                                    "Message": {
+                                        "To": "SecOpsTriagedFolder@organization.com\n",
+                                        "Importance": "Normal",
+                                        "HideHTMLMessage": false,
+                                        "ShowHTMLConfirmationDialog": false,
+                                        "HideMicrosoftFooter": false,
+                                        "Subject": "@body('Summarize_findings')?['EvaluationResultContent']",
+                                        "Options": "Choice1, Choice2, Choice3"
+                                    }
+                                },
+                                "path": "/mailwithoptions/$subscriptions"
+                            }
+                        }
+                    },
+                    "outputs": {}
+                },
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "office365-2": {
+                                "id": "/subscriptions/99005f96-e572-4035-b476-836fd9d83d64/providers/Microsoft.Web/locations/eastus/managedApis/office365",
+                                "connectionId": "[parameters('connections_office365_17_externalid')]",
+                                "connectionName": "office365-17"
+                            },
+                            "securitycopilot-1": {
+                                "id": "/subscriptions/99005f96-e572-4035-b476-836fd9d83d64/providers/Microsoft.Web/locations/eastus/managedApis/securitycopilot",
+                                "connectionId": "[parameters('connections_securitycopilot_15_externalid')]",
+                                "connectionName": "securitycopilot-15"
+                            },
+                            "conversionservice-1": {
+                                "id": "/subscriptions/99005f96-e572-4035-b476-836fd9d83d64/providers/Microsoft.Web/locations/eastus/managedApis/conversionservice",
+                                "connectionId": "[parameters('connections_conversionservice_1_externalid')]",
+                                "connectionName": "conversionservice-1"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ]
+}
